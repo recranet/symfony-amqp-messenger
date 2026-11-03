@@ -1,6 +1,11 @@
 CHANGELOG
 =========
 
+7.4
+---
+
+ * Add support for multiple AMQP hosts in the DSN using `host[hostname:port]` query parameters
+
 7.3
 ---
 

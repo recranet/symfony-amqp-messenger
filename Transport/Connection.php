@@ -215,7 +215,7 @@ class Connection
         $amqpOptions = array_replace_recursive([
             'host' => $params['host'] ?? 'localhost',
             'port' => $params['port'] ?? $port,
-            'vhost' => isset($pathParts[0]) ? urldecode($pathParts[0]) : '/',
+            'vhost' => isset($pathParts[0]) ? rawurldecode($pathParts[0]) : '/',
             'exchange' => [
                 'name' => $exchangeName,
             ],
@@ -238,12 +238,29 @@ class Connection
         $exchangeOptions = $amqpOptions['exchange'];
         $queuesOptions = $amqpOptions['queues'];
         unset($amqpOptions['queues'], $amqpOptions['exchange']);
+
+        foreach (['heartbeat', 'sasl_method'] as $k) {
+            if ('' !== ($amqpOptions[$k] ?? '')) {
+                $amqpOptions[$k] = filter_var($amqpOptions[$k], \FILTER_VALIDATE_INT, \FILTER_NULL_ON_FAILURE) ?? throw new InvalidArgumentException(\sprintf('Option "%s" of the AMQP Messenger transport must be an integer.', $k));
+            }
+        }
+
+        foreach (['read_timeout', 'write_timeout', 'connect_timeout', 'rpc_timeout', 'confirm_timeout'] as $k) {
+            if ('' !== ($amqpOptions[$k] ?? '')) {
+                $amqpOptions[$k] = filter_var($amqpOptions[$k], \FILTER_VALIDATE_FLOAT, \FILTER_NULL_ON_FAILURE) ?? throw new InvalidArgumentException(\sprintf('Option "%s" of the AMQP Messenger transport must be a number.', $k));
+            }
+        }
+
         if (isset($amqpOptions['auto_setup'])) {
-            $amqpOptions['auto_setup'] = filter_var($amqpOptions['auto_setup'], \FILTER_VALIDATE_BOOL);
+            $amqpOptions['auto_setup'] = filter_var($amqpOptions['auto_setup'], \FILTER_VALIDATE_BOOL, \FILTER_NULL_ON_FAILURE) ?? throw new InvalidArgumentException('Option "auto_setup" of the AMQP Messenger transport must be a boolean.');
+        }
+
+        if (isset($amqpOptions['persistent'])) {
+            $amqpOptions['persistent'] = filter_var($amqpOptions['persistent'], \FILTER_VALIDATE_BOOL, \FILTER_NULL_ON_FAILURE) ?? throw new InvalidArgumentException('Option "persistent" of the AMQP Messenger transport must be a boolean.');
         }
 
         if (isset($amqpOptions['delay']['daily_delay_queues'])) {
-            $amqpOptions['delay']['daily_delay_queues'] = filter_var($amqpOptions['delay']['daily_delay_queues'], \FILTER_VALIDATE_BOOL);
+            $amqpOptions['delay']['daily_delay_queues'] = filter_var($amqpOptions['delay']['daily_delay_queues'], \FILTER_VALIDATE_BOOL, \FILTER_NULL_ON_FAILURE) ?? throw new InvalidArgumentException('Option "delay.daily_delay_queues" of the AMQP Messenger transport must be a boolean.');
         }
 
         $queuesOptions = array_map(static function ($queueOptions) {
@@ -263,6 +280,13 @@ class Connection
 
         if ($useAmqps && !self::hasCaCertConfigured($amqpOptions)) {
             throw new InvalidArgumentException('No CA certificate has been provided. Set "amqp.cacert" in your php.ini or pass the "cacert" parameter in the DSN to use SSL. Alternatively, you can use amqp:// to use without SSL.');
+        }
+
+        // ext-amqp casts "verify" to an integer, which turns null and strings like "true" into false
+        if (null === ($amqpOptions['verify'] ?? null)) {
+            unset($amqpOptions['verify']);
+        } else {
+            $amqpOptions['verify'] = filter_var($amqpOptions['verify'], \FILTER_VALIDATE_BOOL, \FILTER_NULL_ON_FAILURE) ?? throw new InvalidArgumentException('Option "verify" of the AMQP Messenger transport must be a boolean.');
         }
 
         return new self($amqpOptions, $exchangeOptions, $queuesOptions, $amqpFactory);
@@ -311,7 +335,7 @@ class Connection
 
     private static function hasCaCertConfigured(array $amqpOptions): bool
     {
-        return (isset($amqpOptions['cacert']) && '' !== $amqpOptions['cacert']) || '' !== \ini_get('amqp.cacert');
+        return !\in_array($amqpOptions['cacert'] ?? null, [null, false, ''], true) || '' !== \ini_get('amqp.cacert');
     }
 
     /**
@@ -565,7 +589,7 @@ class Connection
     public function channel(): \AMQPChannel
     {
         if (!isset($this->amqpChannel)) {
-            $connectMethod = 'true' === ($this->connectionOptions['persistent'] ?? 'false') ? 'pconnect' : 'connect';
+            $connectMethod = filter_var($this->connectionOptions['persistent'] ?? false, \FILTER_VALIDATE_BOOL) ? 'pconnect' : 'connect';
             $hostIndex = 0;
             $hosts = \is_array($this->connectionOptions['host'] ?? null) ? $this->connectionOptions['host'] : [[]];
             do {
@@ -594,7 +618,7 @@ class Connection
 
             $this->lastActivityTime = time();
         } elseif (0 < ($this->connectionOptions['heartbeat'] ?? 0) && time() > $this->lastActivityTime + 2 * $this->connectionOptions['heartbeat'] && 0 === $this->inFlightMessages) {
-            $disconnectMethod = 'true' === ($this->connectionOptions['persistent'] ?? 'false') ? 'pdisconnect' : 'disconnect';
+            $disconnectMethod = filter_var($this->connectionOptions['persistent'] ?? false, \FILTER_VALIDATE_BOOL) ? 'pdisconnect' : 'disconnect';
             $this->amqpChannel->getConnection()->{$disconnectMethod}();
         }
 
